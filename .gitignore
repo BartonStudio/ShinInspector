@@ -1,0 +1,18 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# 原 Shin 仓库参考副本（构建不依赖；webview 代码已 vendor 到 src/webview 与 third_party/webview）
+third_party/Shin/

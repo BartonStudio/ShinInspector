@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShinInspector 远程调试工具</title>
+  <script src="msgpack.js?v=2"></script>
+  <script src="iobject.js?v=2"></script>
+  <script src="transport.js?v=2"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 20px;
+      background: #1e1e1e; color: #eee;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+    }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    h2 { font-size: 14px; margin: 18px 0 8px; border-bottom: 1px solid #444; padding-bottom: 4px; }
+    section { margin-bottom: 8px; }
+    .status { padding: 8px 12px; border-radius: 6px; background: #2d2d2d; margin-bottom: 12px; }
+    .ok { color: #4CAF50; }
+    .warn { color: #ffb300; }
+    .row { margin: 6px 0; }
+    label { margin-right: 12px; }
+    input, select {
+      background: #252526; color: #eee; border: 1px solid #555;
+      padding: 4px 6px; border-radius: 3px; font-family: Consolas, monospace;
+    }
+    input { width: 220px; }
+    input.small { width: 120px; }
+    button {
+      background: #0e639c; color: #fff; border: none;
+      padding: 5px 12px; border-radius: 4px; cursor: pointer; margin-right: 6px;
+    }
+    button:hover { background: #1177bb; }
+    button.secondary { background: #444; }
+    button.secondary:hover { background: #555; }
+    pre, .out {
+      background: #252526; border: 1px solid #333; border-radius: 4px;
+      padding: 8px; margin: 6px 0; white-space: pre-wrap; word-break: break-all;
+      font-family: Consolas, monospace; font-size: 12px; color: #9cdcfe;
+    }
+    #log { max-height: 200px; overflow-y: auto; color: #9cdcfe; }
+    #eventLog { max-height: 160px; overflow-y: auto; color: #ce9178; }
+    .tree-node { margin-left: 4px; }
+    .tree-header { display: flex; align-items: center; }
+    .tree-toggle { width: 20px; padding: 0 4px; margin-right: 4px; background: #333; }
+    .tree-label { cursor: pointer; color: #dcdcaa; }
+    .tree-label:hover { text-decoration: underline; }
+    .tree-kids { margin-left: 18px; }
+    .sub-row { margin: 3px 0; }
+    code { color: #dcdcaa; }
+  </style>
+</head>
+<body>
+  <h1>ShinInspector 远程调试工具 <span id="modeBadge" style="font-size:12px;color:#9cdcfe"></span>
+    <a href="settings.html" style="float:right;font-size:12px;color:#0e639c;text-decoration:none">← 返回设置</a>
+  </h1>
+  <div class="status" id="status">检测桥接…</div>
+
+  <section>
+    <h2>连接 (Connect / Close)</h2>
+    <div class="row">
+      <label>domain <input id="domain" value="shininspector" class="small"></label>
+      <button id="btnConnect">连接</button>
+      <button id="btnClose" class="secondary">关闭</button>
+      <span>root 句柄: <code id="rootHandle">-</code></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>对象树 (GetChildren / GetChildItem)</h2>
+    <div class="row"><button id="btnRefreshTree">刷新根</button><span>（点节点名填充 addr，点 + 展开子节点）</span></div>
+    <div id="treeContainer"></div>
+    <div class="row">
+      <label>addr <input id="childAddr" class="small"></label>
+      <label>childId <input id="childId" placeholder="子对象名"></label>
+      <button id="btnGetChildItem">解析 GetChildItem</button>
+      <span>结果: <code id="childResult">-</code></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>执行方法 (Invoke)</h2>
+    <div class="row">
+      <label>addr <input id="invokeAddr" class="small"></label>
+      <label>method <input id="invokeMethod" placeholder="如 Log" class="small"></label>
+      <label><input type="checkbox" id="invokeArgsText"> 文本</label>
+      <label>args <input id="invokeArgs" placeholder="hex 或文本"></label>
+      <button id="btnInvoke">执行</button>
+    </div>
+    <div class="out" id="invokeResult">(结果)</div>
+  </section>
+
+  <section>
+    <h2>数据通道 (ReadData / WriteData)</h2>
+    <div class="row">
+      <label>addr <input id="chanAddr" class="small"></label>
+      <label>channel <input id="chanName" placeholder="如 Level" class="small"></label>
+      <button id="btnRead">读取</button>
+    </div>
+    <div class="out" id="readResult">(读取结果)</div>
+    <div class="row">
+      <label><input type="checkbox" id="chanDataText"> 文本</label>
+      <label>写入数据 <input id="chanData" placeholder="hex 或文本"></label>
+      <button id="btnWrite">写入</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>事件/信号订阅 (SubscribeEvent / CancelEvent)</h2>
+    <div class="row">
+      <label>addr <input id="evtAddr" class="small"></label>
+      <label>type <input id="evtType" list="evtTypes" placeholder="如 DataChannelChanged"></label>
+      <datalist id="evtTypes">
+        <option value="ChildConnected"></option>
+        <option value="ChildDisconnected"></option>
+        <option value="DataChannelChanged"></option>
+        <option value="Released"></option>
+      </datalist>
+      <button id="btnSubscribe">订阅</button>
+    </div>
+    <div id="subscriptions"></div>
+    <div class="out" id="eventLog">(事件推送)</div>
+  </section>
+
+  <section>
+    <h2>Logger 快捷测试（当前根节点是 Logger）</h2>
+    <div class="row">
+      <button id="btnQuickReadLevel">读取 Level</button>
+      <label>写入 Level
+        <select id="quickLevel">
+          <option value="0">0 Trace</option>
+          <option value="1">1 Debug</option>
+          <option value="2" selected>2 Info</option>
+          <option value="3">3 Warning</option>
+          <option value="4">4 Error</option>
+        </select>
+      </label>
+      <button id="btnQuickWriteLevel">写入 Level</button>
+    </div>
+    <div class="row">
+      <label>Log 级别
+        <select id="quickLogLevel">
+          <option value="0">0 Trace</option>
+          <option value="1">1 Debug</option>
+          <option value="2" selected>2 Info</option>
+          <option value="3">3 Warning</option>
+          <option value="4">4 Error</option>
+        </select>
+      </label>
+      <label>tag <input id="quickLogTag" value="JS" class="small"></label>
+      <label>msg <input id="quickLogMsg" value="hello"></label>
+      <button id="btnQuickLog">发送日志</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>日志</h2>
+    <pre id="log"></pre>
+  </section>
+
+  <script src="debug.js?v=2"></script>
+</body>
+</html>
