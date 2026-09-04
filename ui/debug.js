@@ -123,10 +123,12 @@
 
   // ---------------- 连接 ----------------
   const MODE = (localStorage.getItem('shin.mode') || 'ipc');
+  const WS_URL = localStorage.getItem('shin.wsUrl') || 'ws://127.0.0.1:9002';
+  const WS_DOMAIN = localStorage.getItem('shin.wsDomain') || 'iobject';
 
   function makeTransport() {
     if (MODE === 'ws') {
-      return new WsTransport('ws://127.0.0.1:9002');
+      return new WsTransport(WS_URL);
     }
     const bin = window.Shin && window.Shin.binary;
     if (!bin) throw new Error('window.Shin.binary 不存在');
@@ -135,8 +137,8 @@
 
   async function doConnect() {
     try {
-      const domain = (MODE === 'ws') ? 'iobject' : ($('domain').value.trim() || 'shininspector');
-      log('正在连接 [' + (MODE === 'ws' ? 'WS' : 'IPC') + '] ' + domain + ' ...');
+      const domain = $('domain').value.trim() || (MODE === 'ws' ? WS_DOMAIN : 'shininspector');
+      log('正在连接 [' + (MODE === 'ws' ? 'WS ' + WS_URL : 'IPC') + '] domain=' + domain + ' ...');
       const transport = makeTransport();
       if (transport.connect) await transport.connect();  // WS 需要先建立连接
       client = new IObjectClient(transport, log);
@@ -304,13 +306,13 @@
   const modeName = (MODE === 'ws') ? 'WebSocket (WS)' : '进程间通信 (IPC)';
   $('modeBadge').textContent = '[' + modeName + ']';
   if (MODE === 'ws') {
-    $('domain').value = 'iobject';
+    $('domain').value = WS_DOMAIN;
   }
 
   function check() {
     const st = $('status');
     if (MODE === 'ws') {
-      st.textContent = 'WebSocket 模式：ws://127.0.0.1:9002（点击「连接」建立 WS）';
+      st.textContent = 'WebSocket 模式：' + WS_URL + '（点击「连接」建立 WS）';
       st.className = 'status ok';
       return;
     }
@@ -321,5 +323,5 @@
   }
   check();
   setTimeout(check, 800);
-  log('调试工具已加载 v3 [' + modeName + ']');
+  log('调试工具已加载 v3 [' + modeName + (MODE === 'ws' ? ' ' + WS_URL : '') + ']');
 })();

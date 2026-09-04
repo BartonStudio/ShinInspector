@@ -35,6 +35,10 @@ int App::Run(int argc, char* argv[]) {
     deviceNode->Connect("Sub", subNode);
     LOG_INFO("App", "已挂载测试对象：Sensor / Device / Device.Sub");
 
+    // 可选：启动内置 WebSocket 远程服务端（默认 ws://127.0.0.1:9002，domain "iobject"）。
+    // 业务方按需调用；这里显式启动以支持前端的 WS 模式。
+    app::Domain().startBuiltinWebSocketServer();
+
     // 单线程：把 IObject 事件循环挂到 WebView2 的 UI 消息泵上。
     // 主线程同时承担「WebView2 消息循环」与「IObject 循环线程」两个角色。
     iobject::UseExecutor(std::make_unique<iobject::HostLoopExecutor>(

@@ -12,39 +12,69 @@
       font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
     }
     h1 { font-size: 20px; margin: 0 0 8px; }
-    p.hint { color: #9cdcfe; font-size: 13px; margin: 0 0 24px; }
-    .option {
-      display: block; width: 100%; max-width: 420px; text-align: left;
-      margin: 0 0 12px; padding: 14px 16px;
-      background: #252526; border: 1px solid #444; border-radius: 6px;
-      cursor: pointer; color: #eee; font-family: inherit; font-size: 14px;
+    p.hint { color: #9cdcfe; font-size: 13px; margin: 0 0 20px; }
+    .field { margin: 0 0 14px; padding: 12px 14px; background: #252526; border: 1px solid #444; border-radius: 6px; }
+    .field label { cursor: pointer; font-size: 14px; }
+    .field .desc { color: #9cdcfe; font-size: 12px; margin: 4px 0 0 22px; }
+    .sub { margin-left: 24px; margin-top: 8px; }
+    .sub label { display: block; margin: 6px 0; font-size: 13px; }
+    input[type=text] {
+      background: #1e1e1e; color: #eee; border: 1px solid #555;
+      padding: 5px 8px; border-radius: 3px; font-family: Consolas, monospace; font-size: 13px;
     }
-    .option:hover { background: #2d2d2d; border-color: #0e639c; }
-    .option b { display: block; font-size: 15px; margin-bottom: 4px; }
-    .option span { display: block; color: #9cdcfe; font-size: 12px; }
+    #wsUrl { width: 320px; }
+    button {
+      background: #0e639c; color: #fff; border: none;
+      padding: 8px 20px; border-radius: 4px; cursor: pointer; font-size: 14px;
+    }
+    button:hover { background: #1177bb; }
   </style>
 </head>
 <body>
   <h1>ShinInspector 设置</h1>
-  <p class="hint">选择远程通信方式（之后可在调试页左上角返回重新选择）</p>
+  <p class="hint">选择远程通信方式（地址/域名在此一并配置）</p>
 
-  <button class="option" id="btnIpc">
-    <b>进程间通信（IPC）</b>
-    <span>WebView2 共享内存 + postMessage，本机零拷贝</span>
-  </button>
+  <div class="field">
+    <label><input type="radio" name="mode" value="ipc" checked> 进程间通信（IPC）</label>
+    <div class="desc">WebView2 共享内存 + postMessage，本机零拷贝</div>
+  </div>
 
-  <button class="option" id="btnWs">
-    <b>WebSocket（WS）</b>
-    <span>连接 IObject 内置 WebSocket 服务端 ws://127.0.0.1:9002</span>
-  </button>
+  <div class="field">
+    <label><input type="radio" name="mode" value="ws"> WebSocket（WS）</label>
+    <div class="desc">连接 IObject 内置 WebSocket 服务端</div>
+    <div class="sub" id="wsConfig" style="display:none">
+      <label>地址 <input id="wsUrl" type="text" placeholder="ws://127.0.0.1:9002"></label>
+      <label>domain <input id="wsDomain" type="text" placeholder="iobject"></label>
+    </div>
+  </div>
+
+  <button id="btnGo">进入调试</button>
 
   <script>
-    function choose(mode) {
-      localStorage.setItem('shin.mode', mode);
-      location.href = 'index.html';
+    const $ = (id) => document.getElementById(id);
+
+    // 回显上次设置
+    const saved = localStorage.getItem('shin.mode') || 'ipc';
+    if (saved === 'ws') {
+      document.querySelector('input[name="mode"][value="ws"]').checked = true;
+      $('wsConfig').style.display = 'block';
     }
-    document.getElementById('btnIpc').onclick = () => choose('ipc');
-    document.getElementById('btnWs').onclick = () => choose('ws');
+    $('wsUrl').value = localStorage.getItem('shin.wsUrl') || 'ws://127.0.0.1:9002';
+    $('wsDomain').value = localStorage.getItem('shin.wsDomain') || 'iobject';
+
+    document.querySelectorAll('input[name="mode"]').forEach((r) => {
+      r.onchange = () => { $('wsConfig').style.display = (r.value === 'ws' ? 'block' : 'none'); };
+    });
+
+    $('btnGo').onclick = () => {
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      localStorage.setItem('shin.mode', mode);
+      if (mode === 'ws') {
+        localStorage.setItem('shin.wsUrl', $('wsUrl').value.trim() || 'ws://127.0.0.1:9002');
+        localStorage.setItem('shin.wsDomain', $('wsDomain').value.trim() || 'iobject');
+      }
+      location.href = 'index.html';
+    };
   </script>
 </body>
 </html>
