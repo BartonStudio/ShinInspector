@@ -5,6 +5,7 @@
 #include "BridgeTransport.hpp" // IObject 远程协议 ↔ webview 二进制通道的胶水
 #include "TestObject.hpp"      // 远程调试测试对象
 #include <iobject/Executor.hpp>
+#include <iobject/WebSocketServer.hpp>  // WS 传输服务（多域路由）
 
 #include <memory>
 
@@ -35,9 +36,11 @@ int App::Run(int argc, char* argv[]) {
     deviceNode->Connect("Sub", subNode);
     LOG_INFO("App", "已挂载测试对象：Sensor / Device / Device.Sub");
 
-    // 可选：启动内置 WebSocket 远程服务端（默认 ws://127.0.0.1:9002，domain "iobject"）。
-    // 业务方按需调用；这里显式启动以支持前端的 WS 模式。
-    app::Domain().startBuiltinWebSocketServer();
+    // 启动 WebSocket 远程传输服务端：一个服务可服务多个域，靠 BindDomain 注册路由。
+    auto wsServer = std::make_unique<iobject::WebSocketServer>(
+        iobject::WebSocketServer::Config{9002});
+    wsServer->BindDomain("iobject", app::Domain().BridgeRoot());
+    LOG_INFO("App", "WebSocket 服务端已启动: 9002 (domain=iobject)");
 
     // 单线程：把 IObject 事件循环挂到 WebView2 的 UI 消息泵上。
     // 主线程同时承担「WebView2 消息循环」与「IObject 循环线程」两个角色。
@@ -67,6 +70,9 @@ int App::Run(int argc, char* argv[]) {
         // 摘掉回调，避免 bridgeTransport 销毁后 webview 单例仍持悬挂引用
         webview.SetBinaryReceivedCallback(nullptr);
     } // bridgeTransport 在此销毁，远程会话关闭
+
+    // 停 WS 服务（关闭 WS 会话），再删业务对象（满足「会话先于业务对象销毁」）
+    wsServer.reset();
 
     // 清理测试节点（会话已关闭；节点析构会自动解除拓扑）
     delete sensorNode;
