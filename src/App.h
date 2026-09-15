@@ -24,8 +24,9 @@ public:
 // 全局运行时域：懒初始化（首次访问时自动创建），无需显式注册
 // =============================================================================
 namespace app {
+// 本应用唯一的对象树，域名为 "shininspector"（远程客户端 Connect 时用同名路由到这里）。
 inline iobject::RuntimeDomain& Domain() {
-    static iobject::RuntimeDomain domain(iobject::Runtime::make<InspectorRoot>());
+    static iobject::RuntimeDomain domain(iobject::Runtime::make<InspectorRoot>(), "shininspector");
     return domain;
 }
 

@@ -39,8 +39,8 @@ int App::Run(int argc, char* argv[]) {
     // 启动 WebSocket 远程传输服务端：一个服务可服务多个域，靠 BindDomain 注册路由。
     auto wsServer = std::make_unique<iobject::WebSocketServer>(
         iobject::WebSocketServer::Config{9002});
-    wsServer->BindDomain("iobject", app::Domain().BridgeRoot());
-    LOG_INFO("App", "WebSocket 服务端已启动: 9002 (domain=iobject)");
+    wsServer->BindDomain(app::Domain());  // 路由键 = app::Domain().Name() = "shininspector"
+    LOG_INFO("App", "WebSocket 服务端已启动: 9002 (domain=" + app::Domain().Name() + ")");
 
     // 单线程：把 IObject 事件循环挂到 WebView2 的 UI 消息泵上。
     // 主线程同时承担「WebView2 消息循环」与「IObject 循环线程」两个角色。
@@ -55,7 +55,7 @@ int App::Run(int argc, char* argv[]) {
     {
         ShinInspector::BridgeTransport bridgeTransport(
             app::Domain().BridgeRoot(),
-            "shininspector",
+            app::Domain().Name(),
             [&webview](const void* data, size_t len) {
                 webview.PushSharedMemory(data, len);
             });

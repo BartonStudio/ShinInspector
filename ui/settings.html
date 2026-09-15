@@ -44,7 +44,7 @@
     <div class="desc">连接 IObject 内置 WebSocket 服务端</div>
     <div class="sub" id="wsConfig" style="display:none">
       <label>地址 <input id="wsUrl" type="text" placeholder="ws://127.0.0.1:9002"></label>
-      <label>domain <input id="wsDomain" type="text" placeholder="iobject"></label>
+      <label>domain <input id="wsDomain" type="text" placeholder="shininspector"></label>
     </div>
   </div>
 
@@ -60,7 +60,7 @@
       $('wsConfig').style.display = 'block';
     }
     $('wsUrl').value = localStorage.getItem('shin.wsUrl') || 'ws://127.0.0.1:9002';
-    $('wsDomain').value = localStorage.getItem('shin.wsDomain') || 'iobject';
+    $('wsDomain').value = localStorage.getItem('shin.wsDomain') || 'shininspector';
 
     document.querySelectorAll('input[name="mode"]').forEach((r) => {
       r.onchange = () => { $('wsConfig').style.display = (r.value === 'ws' ? 'block' : 'none'); };
@@ -71,7 +71,7 @@
       localStorage.setItem('shin.mode', mode);
       if (mode === 'ws') {
         localStorage.setItem('shin.wsUrl', $('wsUrl').value.trim() || 'ws://127.0.0.1:9002');
-        localStorage.setItem('shin.wsDomain', $('wsDomain').value.trim() || 'iobject');
+        localStorage.setItem('shin.wsDomain', $('wsDomain').value.trim() || 'shininspector');
       }
       location.href = 'index.html';
     };

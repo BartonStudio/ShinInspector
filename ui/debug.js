@@ -124,7 +124,7 @@
   // ---------------- 连接 ----------------
   const MODE = (localStorage.getItem('shin.mode') || 'ipc');
   const WS_URL = localStorage.getItem('shin.wsUrl') || 'ws://127.0.0.1:9002';
-  const WS_DOMAIN = localStorage.getItem('shin.wsDomain') || 'iobject';
+  const WS_DOMAIN = localStorage.getItem('shin.wsDomain') || 'shininspector';
 
   function makeTransport() {
     if (MODE === 'ws') {
