@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ShinInspector 设置</title>
+  <script src="msgpack.js?v=2"></script>
+  <script src="iobject.js?v=2"></script>
+  <script src="transport.js?v=2"></script>
   <style>
     :root { color-scheme: dark; }
     body {
@@ -23,11 +26,17 @@
       padding: 5px 8px; border-radius: 3px; font-family: Consolas, monospace; font-size: 13px;
     }
     #wsUrl { width: 320px; }
+    .err {
+      display: none; color: #f48771; font-size: 13px;
+      margin: 4px 0 12px; padding: 8px 10px;
+      background: #3a1d1d; border: 1px solid #7a3b3b; border-radius: 4px;
+    }
     button {
       background: #0e639c; color: #fff; border: none;
       padding: 8px 20px; border-radius: 4px; cursor: pointer; font-size: 14px;
     }
     button:hover { background: #1177bb; }
+    button:disabled { background: #555; cursor: wait; }
   </style>
 </head>
 <body>
@@ -48,6 +57,8 @@
     </div>
   </div>
 
+  <div id="err" class="err"></div>
+
   <button id="btnGo">进入调试</button>
 
   <script>
@@ -66,13 +77,51 @@
       r.onchange = () => { $('wsConfig').style.display = (r.value === 'ws' ? 'block' : 'none'); };
     });
 
-    $('btnGo').onclick = () => {
+    function showError(msg) {
+      $('err').textContent = msg;
+      $('err').style.display = 'block';
+    }
+    function clearError() { $('err').style.display = 'none'; }
+
+    // 用一次真实 Connect 握手校验「地址 + 域名」；只有服务端认这个域名才返回成功。
+    // 域名不对时 WS 服务端在首帧路由阶段直接断连（不回复），故加超时兜底。
+    async function validateWs(url, domain) {
+      const ws = new WsTransport(url);
+      await ws.connect(); // 服务器不可达 / 握手失败会在此 reject
+      const client = new IObjectClient(ws, () => {});
+      return await Promise.race([
+        client.connect(domain),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('域名无效或服务未响应')), 4000))
+      ]);
+    }
+
+    $('btnGo').onclick = async () => {
+      clearError();
       const mode = document.querySelector('input[name="mode"]:checked').value;
-      localStorage.setItem('shin.mode', mode);
+
       if (mode === 'ws') {
-        localStorage.setItem('shin.wsUrl', $('wsUrl').value.trim() || 'ws://127.0.0.1:9002');
-        localStorage.setItem('shin.wsDomain', $('wsDomain').value.trim() || 'shininspector');
+        const url = $('wsUrl').value.trim() || 'ws://127.0.0.1:9002';
+        const domain = $('wsDomain').value.trim() || 'shininspector';
+        $('btnGo').disabled = true;
+        $('btnGo').textContent = '校验中…';
+        try {
+          await validateWs(url, domain); // 校验失败会抛异常，停在本页
+          localStorage.setItem('shin.mode', 'ws');
+          localStorage.setItem('shin.wsUrl', url);
+          localStorage.setItem('shin.wsDomain', domain);
+          location.href = 'index.html';
+        } catch (e) {
+          const why = (e && (e.message || e.code)) || String(e);
+          showError('无法进入调试页：' + why + '（请检查地址与域名；domain 必须与宿主注册的路由键逐字一致，当前为 "shininspector"）');
+        } finally {
+          $('btnGo').disabled = false;
+          $('btnGo').textContent = '进入调试';
+        }
+        return;
       }
+
+      // IPC 本机零拷贝，无地址/域名可校验，直接进入。
+      localStorage.setItem('shin.mode', 'ipc');
       location.href = 'index.html';
     };
   </script>
