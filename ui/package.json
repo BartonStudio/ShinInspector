@@ -1,0 +1,13 @@
+{
+  "name": "shininspector-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ShinInspector 前端：把 IObject 官方 JS 客户端（iobject-js）打包成浏览器可直接加载的单文件",
+  "type": "module",
+  "scripts": {
+    "build:sdk": "node build-sdk.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

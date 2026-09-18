@@ -16,3 +16,7 @@ cmake_install.cmake
 
 # 原 Shin 仓库参考副本（构建不依赖；webview 代码已 vendor 到 src/webview 与 third_party/webview）
 third_party/Shin/
+
+# 前端：SDK 打包产物与依赖（由 ui/build-sdk.mjs / pnpm 生成）
+ui/vendor/
+ui/node_modules/

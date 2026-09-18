@@ -1,11 +1,11 @@
 // ShinInspector 远程调试工具。
-// 依赖：window.MsgPack（msgpack.js）、window.IObjectClient（iobject.js）、window.Shin.binary。
+// 依赖：window.IObjectSDK（由 ui/build-sdk.mjs 从官方 iobject-js SDK 打包而来）、window.Shin.binary。
 (function () {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  let client = null;
-  const subs = new Map(); // subscriptionId -> {addr, type}
+  let client = null;               // IObjectSDK.IObjectClient
+  const subs = new Map();          // subscriptionId -> {sub, addr, type}
 
   // ---------------- 工具函数 ----------------
   function hexToBytes(hex) {
@@ -42,9 +42,16 @@
 
   function log(msg) { $('log').textContent += msg + '\n'; }
 
-  function errStr(e) { return e && (e.message || e.code || String(e)) || String(e); }
+  function errStr(e) {
+    if (!e) return '未知错误';
+    if (e && e.code) return e.code + ': ' + (e.message || '');
+    return e.message || String(e);
+  }
 
-  function assertClient() { if (!client || !client.connected) throw new Error('尚未连接'); }
+  function assertClient() { if (!client || !client.isOpen) throw new Error('尚未连接'); }
+
+  // 用 raw addr 临时包一个 RemoteObject（SDK 的对象是 addr 语义化的，这里保持调试页按 addr 操作）。
+  function ro(addr) { return new IObjectSDK.RemoteObject(client, addr); }
 
   function setAddr(addr) {
     $('childAddr').value = addr;
@@ -85,7 +92,7 @@
       if (kids.style.display === 'none') {
         if (kids.childElementCount === 0) {
           try {
-            const children = await client.getChildren(addr);
+            const children = await ro(addr).getChildren();
             for (const c of children) await renderNode(kids, c.name, c.addr);
           } catch (e) { log('GetChildren(' + addr + ') 失败: ' + errStr(e)); }
         }
@@ -103,8 +110,8 @@
       assertClient();
       const container = $('treeContainer');
       container.innerHTML = '';
-      await renderNode(container, 'root', client.root);
-      log('已刷新对象树（root @ ' + client.root + '）');
+      await renderNode(container, 'root', client.root.addr);
+      log('已刷新对象树（root @ ' + client.root.addr + '）');
     } catch (e) { log('刷新对象树失败: ' + errStr(e)); }
   }
 
@@ -114,11 +121,48 @@
       const addr = parseInt($('childAddr').value, 10);
       const childId = $('childId').value.trim();
       if (!childId) throw new Error('childId 不能为空');
-      const resp = await client.getChildItem(addr, childId);
-      $('childResult').textContent = 'addr = ' + resp.addr;
-      log('GetChildItem(' + addr + ', "' + childId + '") = addr ' + resp.addr);
-      setAddr(resp.addr);
+      const obj = await ro(addr).getChildItem(childId);
+      $('childResult').textContent = 'addr = ' + obj.addr;
+      log('GetChildItem(' + addr + ', "' + childId + '") = addr ' + obj.addr);
+      setAddr(obj.addr);
     } catch (e) { log('GetChildItem 失败: ' + errStr(e)); }
+  }
+
+  // ---------------- IPC 传输适配器 ----------------
+  // 把 window.Shin.binary（共享内存桥）伪装成 SDK 的 WebSocketLike，
+  // 这样 IPC / WS 两种模式都走官方 IObjectClient 这一套代码。
+  class IpcSocketAdapter {
+    constructor(url, protocols) {
+      this.binaryType = 'arraybuffer';
+      this.onopen = null;
+      this.onmessage = null;
+      this.onclose = null;
+      this.onerror = null;
+      this._bin = window.Shin && window.Shin.binary;
+      if (!this._bin) throw new Error('window.Shin.binary 不存在');
+
+      this._bin.onData((payload) => {
+        if (this.onmessage) this.onmessage({ data: payload.data });
+      });
+
+      // 共享内存就绪即视为「连接已打开」。SDK 的 waitOpen 会先挂好 onopen，故异步触发。
+      const fireOpen = () => { if (this.onopen && this._bin.ready) this.onopen({}); };
+      if (this._bin.ready) {
+        setTimeout(fireOpen, 0);
+      } else {
+        let tries = 0;
+        const t = setInterval(() => {
+          if (this._bin.ready) { clearInterval(t); fireOpen(); }
+          else if (++tries > 250) { clearInterval(t); if (this.onerror) this.onerror(new Error('共享内存桥超时就绪')); }
+        }, 20);
+      }
+    }
+
+    send(data) {
+      this._bin.write(data).catch((e) => { if (this.onerror) this.onerror(e); });
+    }
+
+    close() { /* IPC 无独立关闭语义；会话随应用生命周期 */ }
   }
 
   // ---------------- 连接 ----------------
@@ -126,29 +170,21 @@
   const WS_URL = localStorage.getItem('shin.wsUrl') || 'ws://127.0.0.1:9002';
   const WS_DOMAIN = localStorage.getItem('shin.wsDomain') || 'shininspector';
 
-  function makeTransport() {
-    if (MODE === 'ws') {
-      return new WsTransport(WS_URL);
-    }
-    const bin = window.Shin && window.Shin.binary;
-    if (!bin) throw new Error('window.Shin.binary 不存在');
-    return new IpcTransport(bin);
-  }
-
   async function doConnect() {
     try {
       const domain = $('domain').value.trim() || (MODE === 'ws' ? WS_DOMAIN : 'shininspector');
       log('正在连接 [' + (MODE === 'ws' ? 'WS ' + WS_URL : 'IPC') + '] domain=' + domain + ' ...');
-      const transport = makeTransport();
-      if (transport.connect) await transport.connect();  // WS 需要先建立连接
-      client = new IObjectClient(transport, log);
-      // 加超时：若 5 秒内没收到 Connect 响应，报错而不是无限挂起
-      const root = await Promise.race([
-        client.connect(domain),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时（5 秒无响应）')), 5000))
-      ]);
-      $('rootHandle').textContent = root;
-      log('已连接，root 句柄 = ' + root);
+      const opts = { domain: domain };
+      let url;
+      if (MODE === 'ws') {
+        url = WS_URL;
+      } else {
+        url = 'ipc://local';
+        opts.WebSocket = IpcSocketAdapter;   // 走共享内存桥的自定义传输
+      }
+      client = await IObjectSDK.IObjectClient.connect(url, opts);
+      $('rootHandle').textContent = client.root.addr;
+      log('已连接，root 句柄 = ' + client.root.addr);
       await refreshTree();
     } catch (e) { log('连接失败: ' + errStr(e)); }
   }
@@ -170,7 +206,7 @@
       if (!method) throw new Error('method 不能为空');
       const args = parseBytes($('invokeArgs').value, $('invokeArgsText').checked);
       log('Invoke: addr=' + addr + ' method=' + method + ' args=' + bytesToHex(args));
-      const result = await client.invoke(addr, method, args);
+      const result = await ro(addr).invoke(method, args);
       $('invokeResult').textContent = showBytes(result);
       log('Invoke 返回: ' + showBytes(result));
     } catch (e) { log('Invoke 失败: ' + errStr(e)); }
@@ -183,7 +219,7 @@
       const addr = parseInt($('chanAddr').value, 10);
       const channel = $('chanName').value.trim();
       if (!channel) throw new Error('channel 不能为空');
-      const data = await client.readData(addr, channel);
+      const data = await ro(addr).readData(channel);
       $('readResult').textContent = showBytes(data);
       log('ReadData(' + addr + ', "' + channel + '") = ' + showBytes(data));
     } catch (e) { log('ReadData 失败: ' + errStr(e)); }
@@ -196,7 +232,7 @@
       const channel = $('chanName').value.trim();
       if (!channel) throw new Error('channel 不能为空');
       const data = parseBytes($('chanData').value, $('chanDataText').checked);
-      await client.writeData(addr, channel, data);
+      await ro(addr).writeData(channel, data);
       log('WriteData(' + addr + ', "' + channel + '") 成功, 数据 = ' + bytesToHex(data));
     } catch (e) { log('WriteData 失败: ' + errStr(e)); }
   }
@@ -218,9 +254,9 @@
       const addr = parseInt($('evtAddr').value, 10);
       const type = $('evtType').value.trim();
       if (!type) throw new Error('type 不能为空');
-      const sid = await client.subscribeEvent(addr, type, onEvent);
-      subs.set(sid, { addr: addr, type: type });
-      log('已订阅: sub#' + sid + ' (' + type + ' @ ' + addr + ')');
+      const sub = await ro(addr).subscribe(type, onEvent);
+      subs.set(sub.id, { sub: sub, addr: addr, type: type });
+      log('已订阅: sub#' + sub.id + ' (' + type + ' @ ' + addr + ')');
       renderSubs();
     } catch (e) { log('SubscribeEvent 失败: ' + errStr(e)); }
   }
@@ -236,7 +272,7 @@
       btn.textContent = '取消';
       btn.onclick = async () => {
         try {
-          await client.cancelEvent(sid);
+          await info.sub.cancel();
           subs.delete(sid);
           log('已取消 sub#' + sid);
           renderSubs();
@@ -247,7 +283,7 @@
     }
   }
 
-  // ---------------- Logger 快捷测试（当前根节点是 Logger） ----------------
+  // ---------------- Logger 快捷测试 ----------------
   function encodeLogMessage(level, tag, msg) {
     const tagB = new TextEncoder().encode(tag);
     const msgB = new TextEncoder().encode(msg);
@@ -264,7 +300,7 @@
   async function quickReadLevel() {
     try {
       assertClient();
-      const data = await client.readData(client.root, 'Level');
+      const data = await client.root.readData('Level');
       log('Logger Level = ' + bytesToHex(data) + ' (0=Trace..4=Error)');
     } catch (e) { log('读取 Level 失败: ' + errStr(e)); }
   }
@@ -273,7 +309,7 @@
     try {
       assertClient();
       const lv = parseInt($('quickLevel').value, 10);
-      await client.writeData(client.root, 'Level', new Uint8Array([lv]));
+      await client.root.writeData('Level', new Uint8Array([lv]));
       log('已写入 Level = ' + lv);
     } catch (e) { log('写入 Level 失败: ' + errStr(e)); }
   }
@@ -284,7 +320,7 @@
       const lv = parseInt($('quickLogLevel').value, 10);
       const tag = $('quickLogTag').value.trim() || 'JS';
       const msg = $('quickLogMsg').value;
-      await client.invoke(client.root, 'Log', encodeLogMessage(lv, tag, msg));
+      await client.root.invoke('Log', encodeLogMessage(lv, tag, msg));
       log('已发送 Log(' + lv + ', "' + tag + '", "' + msg + '")');
     } catch (e) { log('发送 Log 失败: ' + errStr(e)); }
   }
@@ -323,5 +359,5 @@
   }
   check();
   setTimeout(check, 800);
-  log('调试工具已加载 v3 [' + modeName + (MODE === 'ws' ? ' ' + WS_URL : '') + ']');
+  log('调试工具已加载 v4 [' + modeName + (MODE === 'ws' ? ' ' + WS_URL : '') + ']');
 })();

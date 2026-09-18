@@ -4,9 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ShinInspector 设置</title>
-  <script src="msgpack.js?v=2"></script>
-  <script src="iobject.js?v=2"></script>
-  <script src="transport.js?v=2"></script>
+  <script src="vendor/iobject-sdk.js?v=1"></script>
   <style>
     :root { color-scheme: dark; }
     body {
@@ -84,15 +82,9 @@
     function clearError() { $('err').style.display = 'none'; }
 
     // 用一次真实 Connect 握手校验「地址 + 域名」；只有服务端认这个域名才返回成功。
-    // 域名不对时 WS 服务端在首帧路由阶段直接断连（不回复），故加超时兜底。
+    // 域名不对时 WS 服务端在首帧路由阶段直接断连，SDK 的 onclose 会立即 reject（无需超时兜底）。
     async function validateWs(url, domain) {
-      const ws = new WsTransport(url);
-      await ws.connect(); // 服务器不可达 / 握手失败会在此 reject
-      const client = new IObjectClient(ws, () => {});
-      return await Promise.race([
-        client.connect(domain),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('域名无效或服务未响应')), 4000))
-      ]);
+      await IObjectSDK.IObjectClient.connect(url, { domain });
     }
 
     $('btnGo').onclick = async () => {
