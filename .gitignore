@@ -18,5 +18,9 @@ cmake_install.cmake
 third_party/Shin/
 
 # 前端：依赖与 Vite 构建产物（由 pnpm / vite 生成）
-ui/node_modules/
-ui/dist/
+# 刻意写成路径无关：ui/ 以后若搬到 apps/<app>/ui/，这里不必再回来改
+node_modules/
+dist/
+
+# 本地工作区数据（AI 会话记忆、临时日志与截图），不入库
+.workbuddy/
