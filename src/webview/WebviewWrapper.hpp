@@ -30,6 +30,12 @@ namespace UI {
         // Enables remote debugging (CDP) on localhost:<port>. Must be called before Initialize().
         // port <= 0 disables remote debugging.
         void SetRemoteDebuggingPort(int port);
+
+        // 追加一段额外的 Chromium 浏览器参数，必须在 Initialize() 之前调用，可累加。
+        // 与 SetRemoteDebuggingPort 互不覆盖：后者只替换它自己那段。
+        // 用途示例："--ignore-gpu-blocklist" —— WebGL 是 ShinInspector 的硬依赖，
+        // 集显/虚拟 GPU 被黑名单拦下时会悄悄退到软件路径，表现为前端直接停摆。
+        void AppendBrowserArguments(const std::string& args);
         void SetParentWindow(void* hwnd);
         
         void SetStartupURL(const std::string& url);
@@ -45,6 +51,28 @@ namespace UI {
 
         void SetTitle(const std::string& title);
         void SetSize(int width, int height, bool fixed = false);
+
+        // 「设计尺寸 -> 实际窗口」的换算结果，供调用方记日志 / 核对。
+        struct WindowMetrics {
+            int designWidth = 0;       // 逻辑像素（DIP），即"人眼看上去应该是多大"
+            int designHeight = 0;
+            int dpi = 96;              // 窗口所在显示器的缩放基准，96 = 100%
+            int workAreaWidth = 0;     // 显示器工作区（物理像素，已扣掉任务栏）
+            int workAreaHeight = 0;
+            int windowWidth = 0;       // 实际外框（物理像素）
+            int windowHeight = 0;
+            int clientWidth = 0;       // 实际客户区（物理像素）
+            int clientHeight = 0;
+            bool shrunkToFit = false;  // 工作区放不下，已被等比收缩
+        };
+
+        // 按显示器 DPI 把设计尺寸（逻辑像素）换算成物理像素，再按工作区收敛并居中。
+        // 必须在 Initialize() 成功之后、于当前 UI 线程调用；否则原样返回并记一条错误日志。
+        //
+        // 这是"1280x720 在任何缩放比例下都不溢出屏幕"的唯一落点：
+        // 底层 webview 的 set_size 只做 DPI 换算 + 加非客户区边框，从不检查工作区
+        // （见 third_party/webview/.../backends/win32_edge.hh 的 set_size_impl）。
+        WindowMetrics ApplyDesignSize(int designWidth, int designHeight);
 
         struct BrowserExtensionResult {
             bool success = false;

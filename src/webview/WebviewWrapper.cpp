@@ -41,6 +41,106 @@ namespace {
     LRESULT CALLBACK ChildSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
     BOOL CALLBACK EnumChildProc(HWND hWnd, LPARAM lParam);
 
+    // ---- DPI / 工作区工具 ----------------------------------------------------
+    //
+    // GetDpiForWindow 与 AdjustWindowRectExForDpi 都是 Win10 1607 才有的导出。
+    // WebView2 运行时的门槛（Win10 1809）已经高于它们，但仍走 GetProcAddress：
+    // 这样即便对上老 SDK 也能编过，且运行时永远留有一条回退路径。
+
+    using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+    using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+
+    int DpiOfWindow(HWND hwnd) {
+        static auto getDpi = reinterpret_cast<GetDpiForWindowFn>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+        if (getDpi) {
+            const UINT dpi = getDpi(hwnd);
+            if (dpi > 0) return static_cast<int>(dpi);
+        }
+        HDC dc = GetDC(hwnd);
+        const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSY) : 0;
+        if (dc) ReleaseDC(hwnd, dc);
+        return dpi > 0 ? dpi : 96;
+    }
+
+    /// 把客户区尺寸加上非客户区（标题栏 / 边框），得到 SetWindowPos 需要的外框尺寸。
+    void SizeWithFrame(HWND hwnd, int& width, int& height, UINT dpi) {
+        static auto adjustForDpi = reinterpret_cast<AdjustWindowRectExForDpiFn>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
+        const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+        const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+        RECT r{0, 0, width, height};
+        if (adjustForDpi) {
+            adjustForDpi(&r, style, FALSE, exStyle, dpi);
+        } else {
+            AdjustWindowRectEx(&r, style, FALSE, exStyle);
+        }
+        width = r.right - r.left;
+        height = r.bottom - r.top;
+    }
+
+    RECT WorkAreaOf(HWND hwnd) {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor && GetMonitorInfoW(monitor, &mi)) return mi.rcWork;
+        // 拿不到显示器信息就退回主屏工作区：宁可多缩一点，也不要溢出。
+        RECT work{};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        return work;
+    }
+
+    /// 把窗口收进工作区：放不下就等比收缩；center=true 时居中，否则只在越界时推回来。
+    void FitWindowIntoWorkArea(HWND hwnd, bool center) {
+        if (!hwnd || IsIconic(hwnd) || IsZoomed(hwnd)) return;  // 最小化 / 最大化交给系统
+
+        RECT wr{};
+        if (!GetWindowRect(hwnd, &wr)) return;
+        const RECT work = WorkAreaOf(hwnd);
+        const int workW = work.right - work.left;
+        const int workH = work.bottom - work.top;
+        if (workW <= 0 || workH <= 0) return;
+
+        const int curW = wr.right - wr.left;
+        const int curH = wr.bottom - wr.top;
+        if (curW <= 0 || curH <= 0) return;
+
+        int w = curW;
+        int h = curH;
+        // 逐项比较取最小。不要写成 std::min({a, b, c}) ——
+        // windows.h 的 min/max 是**函数式宏**，会把花括号参数表当成"宏传了 3 个参数"直接报错；
+        // 带括号的 (std::min)(a, b) 才安全，因为 min 后面紧跟的是 ')' 而不是 '('。
+        double fit = static_cast<double>(workW) / curW;
+        const double fitH = static_cast<double>(workH) / curH;
+        if (fitH < fit) fit = fitH;
+        if (fit > 1.0) fit = 1.0;
+        if (fit < 1.0) {
+            w = (std::max)(360, static_cast<int>(curW * fit));
+            h = (std::max)(260, static_cast<int>(curH * fit));
+            center = true;
+        }
+
+        int x = wr.left;
+        int y = wr.top;
+        if (center) {
+            x = work.left + (workW - w) / 2;
+            y = work.top + (workH - h) / 2;
+        } else {
+            // 只用 int 参与比较：work.left / work.right 是 LONG，与 int 混用会让
+            // std::min/std::max 的模板推导直接失败（_Ty 到底是 LONG 还是 int？）。
+            const int minX = work.left;
+            const int minY = work.top;
+            const int maxX = work.right - w;
+            const int maxY = work.bottom - h;
+            if (x < minX) x = minX;
+            if (y < minY) y = minY;
+            if (x > maxX) x = maxX;
+            if (y > maxY) y = maxY;
+        }
+        if (x == wr.left && y == wr.top && w == curW && h == curH) return;
+        SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
     LRESULT CALLBACK HostSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
         switch (uMsg) {
         case WM_NCCALCSIZE: {
@@ -90,6 +190,14 @@ namespace {
                 if (right) return HTRIGHT;
             }
             return hit;
+        }
+        case 0x02E0 /*WM_DPICHANGED*/: {
+            // 先把消息交给底层 webview：它会按新 DPI 重算客户区尺寸（只做换算，且带 SWP_NOMOVE，
+            // 于是窗口围着左上角长）。放到 100% 屏幕上创建、再拖到 150% 屏幕上时，
+            // 窗口会长到屏幕外面去 —— 这里补上工作区兜底，把窗口收回来。
+            LRESULT handled = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            FitWindowIntoWorkArea(hWnd, /* center */ false);
+            return handled;
         }
         case WM_SIZE:
         case WM_SHOWWINDOW: {
@@ -312,7 +420,10 @@ namespace UI {
         int height = 600;
         int hints = WEBVIEW_HINT_NONE;
         bool browserExtensionsEnabled = false;
+        // 由 SetRemoteDebuggingPort 维护（它每次会整体替换）
         std::string additionalBrowserArguments;
+        // 由 AppendBrowserArguments 累加，与上面互不覆盖；Initialize 时拼在最后
+        std::vector<std::string> extraBrowserArguments;
         
         struct BindData {
             std::string name;
@@ -358,6 +469,11 @@ namespace UI {
             m_impl->additionalBrowserArguments =
                 "--remote-debugging-port=" + std::to_string(port);
         }
+    }
+
+    void WebviewWrapper::AppendBrowserArguments(const std::string& args) {
+        if (m_impl->isInitialized || args.empty()) return;
+        m_impl->extraBrowserArguments.push_back(args);
     }
 
     void WebviewWrapper::SetParentWindow(void* hwnd) {
@@ -440,14 +556,82 @@ namespace UI {
         }
     }
 
+    WebviewWrapper::WindowMetrics WebviewWrapper::ApplyDesignSize(int designWidth, int designHeight) {
+        WindowMetrics out;
+        out.designWidth = designWidth;
+        out.designHeight = designHeight;
+        out.clientWidth = designWidth;
+        out.clientHeight = designHeight;
+        out.windowWidth = designWidth;
+        out.windowHeight = designHeight;
+
+#ifdef _WIN32
+        HWND hwnd = static_cast<HWND>(GetNativeWindow());
+        if (!hwnd) return out;
+
+        // 尺寸/位置只能在 UI 线程改（窗口归属线程），否则会和外层消息泵打架。
+        if (std::this_thread::get_id() != m_impl->uiThreadId) {
+            LOG_ERROR("Webview", "ApplyDesignSize 必须在 UI 线程调用，已忽略。");
+            return out;
+        }
+
+        const int dpi = DpiOfWindow(hwnd);
+        out.dpi = dpi;
+
+        // 逻辑像素 -> 物理像素 -> 加上非客户区边框
+        int winW = MulDiv(designWidth, dpi, 96);
+        int winH = MulDiv(designHeight, dpi, 96);
+        SizeWithFrame(hwnd, winW, winH, static_cast<UINT>(dpi));
+
+        const RECT work = WorkAreaOf(hwnd);
+        const int workW = work.right - work.left;
+        const int workH = work.bottom - work.top;
+        out.workAreaWidth = workW;
+        out.workAreaHeight = workH;
+
+        // 小屏 / 高缩放系数下 1280x720 可能装不下：等比收缩，保持 16:9 的构图不变形。
+        if (workW > 0 && workH > 0) {
+            // 同 FitWindowIntoWorkArea：不能用 std::min({...})，windows.h 的 min 宏会误判参数个数。
+            double fit = static_cast<double>(workW) / winW;
+            const double fitH = static_cast<double>(workH) / winH;
+            if (fitH < fit) fit = fitH;
+            if (fit > 1.0) fit = 1.0;
+            if (fit < 1.0) {
+                winW = (std::max)(360, static_cast<int>(winW * fit));
+                winH = (std::max)(260, static_cast<int>(winH * fit));
+                out.shrunkToFit = true;
+            }
+            const int x = work.left + (std::max)(0, (workW - winW) / 2);
+            const int y = work.top + (std::max)(0, (workH - winH) / 2);
+            SetWindowPos(hwnd, nullptr, x, y, winW, winH, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
+        RECT cr{};
+        GetClientRect(hwnd, &cr);
+        out.windowWidth = winW;
+        out.windowHeight = winH;
+        out.clientWidth = cr.right - cr.left;
+        out.clientHeight = cr.bottom - cr.top;
+#endif
+        return out;
+    }
+
     bool WebviewWrapper::Initialize() {
         if (m_impl->isInitialized) return true;
 
         try {
+            // 拼接全部额外浏览器参数：远程调试那段在前，追加参数在后。
+            std::string browserArgs = m_impl->additionalBrowserArguments;
+            for (const auto& extra : m_impl->extraBrowserArguments) {
+                if (extra.empty()) continue;
+                if (!browserArgs.empty()) browserArgs += ' ';
+                browserArgs += extra;
+            }
+
             m_impl->w = std::make_unique<webview::webview>(
                 m_impl->debug, m_impl->parentWindow,
                 m_impl->browserExtensionsEnabled,
-                m_impl->additionalBrowserArguments);
+                browserArgs);
             m_impl->uiThreadId = std::this_thread::get_id();
 
             m_impl->w->set_title(m_impl->title);
