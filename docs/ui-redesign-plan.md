@@ -3,6 +3,10 @@
 > 把「表单面板式调试页」重构为「基于 Three.js 的节点可视化调试器」，并移除进程间通信（IPC）通道，只保留 WebSocket。
 >
 > 状态：**已实施并验证**（见文末「验证记录」）。
+>
+> ⚠️ **路径注记**：本文写于结构重构之前 —— 文中出现的 `ui/` 现已是 `apps/inspector/ui/`
+> （`ui/tools/` → `apps/inspector/ui/tools/`）。`src/` 与 `third_party/` 路径未变。
+> 分层的施工依据见 `workspace-layout-plan.md`。
 
 ---
 

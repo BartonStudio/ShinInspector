@@ -42,14 +42,28 @@ ShinInspector 不是"一个工具"，而是**一个平台 + 若干方案**：
 ├─ apps/                          # ★ 可变：一个方案一个目录，彼此互不可见
 │  └─ inspector/
 │     ├─ app.json                 #   方案清单（见 §3）
-│     ├─ ui/                      #   该方案的全部界面（index.html / styles / src）
+│     ├─ ui/                      #   该方案的全部界面 + 前端构建单元（见 §2.1）
+│     │  ├─ index.html  styles/  src/      # 界面本身
+│     │  ├─ tools/                         # smoke.mjs · look.mjs · probe-ws.mjs
+│     │  ├─ package.json  vite.config.mjs  # 前端构建配置（vite root = 本目录）
+│     │  └─ node_modules/                  # 不入库
 │     ├─ native/                  #   该方案的 C++（可选）—— ← TestObject / DemoTree
-│     ├─ tools/                   #   smoke.mjs · look.mjs · probe-ws.mjs
 │     └─ CMakeLists.txt
 ├─ third_party/                   # 不动（IObject 是 submodule）
 ├─ docs/
 └─ CMakeLists.txt                 # 根：加 third_party → platform → 遍历 apps
 ```
+
+### 2.1 `tools/` 与前端构建文件都留在 `ui/`
+
+`tools/` **不**提升为 `apps/<name>/tools/`：三个脚本都 `import 'puppeteer-core'`，
+而 Node 的依赖解析是**逐级向上找 `node_modules`**。拆开后 `apps/<name>/tools/`
+只能找到 `apps/node_modules` 或仓库根 `node_modules`，都不可靠 —— 要么复制一棵依赖树，
+要么额外设 `NODE_PATH`。同理，`package.json` / `vite.config.mjs` / `node_modules` 也一起留在 `ui/`：
+
+> **`ui/` 就是一个能独立 `npm install && npm run dev` 的前端包。** 边界最清楚。
+
+代价是 `ui/` 里混进了"非界面"的内容；换来的是不必维护第二份依赖树。
 
 ## 3. 方案清单 `app.json`
 
@@ -128,14 +142,19 @@ build/bin/
 
 每一步都可独立验证，不要合并跳跃。
 
-| # | 步骤 | 验证方式 |
-| --- | --- | --- |
-| 1 | 删死代码：`src/BridgeTransport.hpp`、`src/webview/ShinBinaryJS.hpp`（grep 确认零引用） | 增量编译通过 |
-| 2 | `ui/` → `apps/inspector/ui/`，Vite root 指过去（**不改任何逻辑**） | dev server 起得来、界面照旧 |
-| 3 | 抽 `platform/webui`：`session/diagnose/store/memory` 移入，加 alias `@shin/webui` | 冒烟测试全绿 |
-| 4 | 抽 `platform/host`：`WebviewWrapper` 平移 + `AppManifest` 读 `app.json`；`App.h` 的硬编码域名改为从清单注入 | `--demo` 仍能起、日志 DPI 行正常 |
-| 5 | `TestObject` + `DemoTree` → `apps/inspector/native/`，改 `shin_add_app(inspector NATIVE_TARGET …)` | 生成同名 exe，`--demo` 跑通 |
-| 6 | 建第二个方案骨架（hello world 即可） | **验证"加方案零改平台"是否真成立** |
+| # | 步骤 | 验证方式 | 状态 |
+| --- | --- | --- | --- |
+| 1 | 删死代码：`src/BridgeTransport.hpp`、`src/webview/ShinBinaryJS.hpp`（grep 确认零引用） | 增量编译通过 | ✅ |
+| 2 | `ui/` → `apps/inspector/ui/`，Vite root 指过去（**不改任何逻辑**） | dev server 起得来、界面照旧 | ✅ 冒烟 60/60 |
+| 3 | 抽 `platform/webui`：`session/diagnose/store/memory` 移入，加 alias `@shin/webui` | 冒烟测试全绿 | 待做 |
+| 4 | 抽 `platform/host`：`WebviewWrapper` 平移 + `AppManifest` 读 `app.json`；`App.h` 的硬编码域名改为从清单注入 | `--demo` 仍能起、日志 DPI 行正常 | 待做 |
+| 5 | `TestObject` + `DemoTree` → `apps/inspector/native/`，改 `shin_add_app(inspector NATIVE_TARGET …)` | 生成同名 exe，`--demo` 跑通 | 待做 |
+| 6 | 建第二个方案骨架（hello world 即可） | **验证"加方案零改平台"是否真成立** | 待做 |
+
+**第 2 步的实测记录**：`ui/` 搬走后，唯一**必须**改的是 `vite.config.mjs` 里的
+`repoRoot = resolve(here, '..')` —— 目录深度从 1 层变 3 层。少改这一处不会报"路径错误"，
+而是 dev server 报**无法解析 `iobject-js`**，很容易往 SDK 方向查错。
+其余（`index.html` / `styles/` / `src/` / `tools/`）含路径的只有注释。
 
 ### 5.1 改名合并到本次重构
 
@@ -158,3 +177,9 @@ git remote set-url origin https://github.com/BartonStudio/Shin-Apps.git
 4. **`third_party/IObject` 是 submodule，且当前处于未初始化状态**（实际内容是一份独立 clone，
    内含 `js/node_modules`）。提交时**不要 `git add -A`**，会把它连同 node_modules 卷进去 —— 逐路径 `add`。
 5. **`.workbuddy/` 不入库**（已加入 `.gitignore`）。它是本地工作区数据（AI 会话记忆、临时日志与截图）。
+6. **目录整体改名要先让"cwd 停在里面"的进程退出**。实测 `mv ui apps/inspector/ui` 报
+   `Device or resource busy`，而 `mv ui/<每个子项>` **全部成功** —— 说明挡住的不是文件句柄，
+   而是**某个进程的当前工作目录正好是 `ui/`**（就是启动 dev server 的那个终端；
+   杀掉 vite **进程**并不会改变那个**终端**的 cwd）。
+   判据：**子项能移、父目录不能移 → 去找 cwd，别去查文件锁。**
+   补记：搬空后 `rmdir ui` 同样失败（仍被占用）；空目录不进 git，留着无害。

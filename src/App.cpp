@@ -67,7 +67,7 @@ int App::Run(int argc, char* argv[]) {
     auto& webview = Shin::UI::WebviewWrapper::GetInstance();
     webview.SetTitle(demo ? "ShinInspector [demo]" : "ShinInspector");
     webview.SetSize(kDesignWidth, kDesignHeight, false);
-    // 前端由 Vite 开发服务器托管（ui/ 目录，端口 8848，见 ui/vite.config.mjs）。
+    // 前端由 Vite 开发服务器托管（apps/inspector/ui/，端口 8848，见该目录的 vite.config.mjs）。
     // 工具只通过 WebSocket 连接目标应用，因此这里不再注入任何桥接脚本。
     webview.SetStartupURL("http://127.0.0.1:8848/index.html");
 

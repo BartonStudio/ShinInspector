@@ -150,7 +150,7 @@ logLine('视口 ' + window.innerWidth + 'x' + window.innerHeight
 //
 // 之所以要显式暴露，是因为 Vite dev server 会给模块 URL 挂 HMR 时间戳（?t=…），
 // 从控制台或外部脚本 import('/src/store.js') 拿到的是**另一个模块实例**，
-// 读到的 state 全是初始值 —— ui/tools/smoke.mjs 就踩过这个坑。
+// 读到的 state 全是初始值 —— apps/inspector/ui/tools/smoke.mjs 就踩过这个坑。
 window.__shin = {
   state, emit, on, select, setUI, logLine, renderer,
   session, memory,

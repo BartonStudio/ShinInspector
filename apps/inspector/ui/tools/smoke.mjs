@@ -6,11 +6,12 @@
 //   真实时钟（puppeteer 驱动）才靠得住。
 //
 // 用法：
-//   node ui/tools/smoke.mjs [wsUrl] [domain]
-//   SHIN_APP_URL=http://127.0.0.1:8848/index.html node ui/tools/smoke.mjs
+//   node apps/inspector/ui/tools/smoke.mjs [wsUrl] [domain]
+//   SHIN_APP_URL=http://127.0.0.1:8848/index.html node apps/inspector/ui/tools/smoke.mjs
 //
-// 前置：ui 的 Vite dev server 已在跑；并有一个提供 demo 对象树的 WS 服务
-//       （ShinInspectorApp.exe --demo，默认 9002）。
+// 前置：该方案的 Vite dev server 已在跑（apps/inspector/ui 下 `npm run dev`）；
+//       并有一个提供 demo 对象树的 WS 服务（ShinInspectorApp.exe --demo，默认 9002）。
+// 注意：输出目录取 process.cwd()，所以**从仓库根运行**，临时文件才落在 .workbuddy/tmp/。
 
 import fs from 'node:fs';
 import path from 'node:path';

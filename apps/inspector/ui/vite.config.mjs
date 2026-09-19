@@ -1,12 +1,15 @@
 // ShinInspector 前端 Vite 配置。
-// 前端源码根 = 本目录（ui/）。SDK 源码在 ../third_party/IObject/js（位于 ui/ 之外），
+// 前端源码根 = 本目录（apps/<app>/ui 里的方案前端）。
+// SDK 源码在仓库根的 third_party/IObject/js（在方案目录之外），
 // 通过 alias + server.fs.allow 引入；Vite 用 esbuild 即时转译 TS，无需手动编译。
 import { defineConfig } from 'vite';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..');
+// apps/<app>/ui -> 上溯三层才到仓库根。少写一层会让 SDK alias 与 fs.allow 一起指错，
+// 症状是 dev server 报"无法解析 iobject-js"，而不是路径相关的报错 —— 别按报错字面去查。
+const repoRoot = resolve(here, '..', '..', '..');
 const sdkEntry = resolve(repoRoot, 'third_party', 'IObject', 'js', 'src', 'index.ts');
 
 export default defineConfig({
@@ -21,7 +24,7 @@ export default defineConfig({
     port: 8848,        // 与 src/App.cpp 的 SetStartupURL 端口一致
     strictPort: true,
     fs: {
-      // 允许 dev server 读取仓库根（SDK 源码在 ui/ 之外，默认 allow 列表会拦它）。
+      // 允许 dev server 读取仓库根（SDK 源码在方案目录之外，默认 allow 列表会拦它）。
       allow: [repoRoot],
     },
   },

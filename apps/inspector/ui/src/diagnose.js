@@ -26,7 +26,7 @@ export function parseWsUrl(raw) {
     return null;
   }
 
-  // 实测（ui/tools/probe-ws.mjs）：WebSocket 构造器接受 http/https 并自动改写为
+  // 实测（apps/inspector/ui/tools/probe-ws.mjs）：WebSocket 构造器接受 http/https 并自动改写为
   // ws/wss —— Chrome 的报错文案自己就写着 "must be either 'http', 'https', 'ws',
   // or 'wss'"。所以 http:// 不是错误，别把它当格式问题拦下来。
   // 但 https:// 会变成 wss://，那是另一个失败模式（明文端口上做 TLS 握手），
