@@ -1,0 +1,748 @@
+/* ShinInspector —— TUI / 终端风主题（black + orange）。
+ *
+ * 三条设计约束，改样式前先读：
+ * 1) 一切皆等宽字体、直角、1px 硬边框、方括号按钮 —— 要像一台终端，不像一张网页；
+ * 2) 1280x720 是基准视口。纵向预算：顶栏 34 + 时间线 148 + 画布余量，
+ *    任何面板都不许把视口撑破，装不下的内容一律**内部滚动**；
+ * 3) 颜色只有四个语义槽：白=正文/正常，橙=强调/选中/主操作，琥珀=数据变化，红=错误。
+ *
+ * 关于配色（换过一次，别再换回去）：
+ *   上一版是"满屏荧光绿"，高饱和绿字贴黑底对眼睛极不友好 —— 绿在暗背景上会
+ *   产生强烈的色差闪烁感，长时间盯着发涩。现在改成终端里最常见的高级方案：
+ *   正文用近白（#f2f2f2），橙色（#ff9000）只用来点"需要你注意的东西"——
+ *   选中、root、主按钮、焦点框。强调色占屏比例压到极低，眼睛才不累。
+ *   次级文字整体提亮（#a6a6a6 / #7d7d7d），11px 的字在暗底上要看得清才谈得上舒服。
+ *
+ * 变量名与语义类名沿用改造前的命名（--surface / .sec / .row / .ty-* …），
+ * 这样 JS 侧一行都不用动 —— 换皮不换骨。
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* —— 黑：从纯黑底到抬起的表面 —— */
+  --bg:         #000000;   /* 画布/页面底色，与 Three.js 的 BG 常量必须一致 */
+  --bg-deep:    #0a0a0a;   /* 输入框这类"凹下去"的表面 */
+  --surface:    #0d0d0d;   /* 面板底 */
+  --surface-2:  #161616;   /* 行/卡片底 */
+  --surface-3:  #1f1f1f;   /* 抬起的表面 */
+
+  --border:     #262626;   /* 框线 */
+  --border-2:   #3d3d3d;   /* 框线·亮 / hover */
+
+  --text:       #f2f2f2;   /* 主文本：近白（不用纯白，避免暗底上的光晕） */
+  --text-dim:   #a6a6a6;   /* 次级 */
+  --text-faint: #7d7d7d;   /* 三级 / 注释（11px 也要够对比度） */
+
+  --accent:     #ff9000;   /* 唯一强调色：选中 / root / 主操作 */
+  --accent-dim: #3a2200;   /* 强调色的暗底（激活态按钮） */
+
+  --warn:       #ffc23d;   /* 数据变化脉冲 / 警告 */
+  --danger:     #ff4d4d;   /* 错误 */
+
+  --mono: 'Cascadia Mono', 'JetBrains Mono', 'Sarasa Mono SC', Consolas,
+          'Microsoft YaHei Mono', 'Microsoft YaHei', monospace;
+  /* TUI 没有第二套字体：正文也是等宽，只借 sans 变量名继续向下传递 */
+  --sans: var(--mono);
+
+  --r: 0px;                       /* 直角。半径保留为变量，便于将来整体切换 */
+  --glow: 0 0 7px rgba(255, 144, 0, .30);
+  --glow-soft: 0 0 5px rgba(255, 144, 0, .20);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: .01em;
+  overflow: hidden;
+  /* 终端里没有平滑滚动，也不需要连字 */
+  font-variant-ligatures: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+body ::selection { background: var(--accent); color: var(--bg); }
+
+/* ---------------- CRT 覆盖层（扫描线 + 暗角） ----------------
+   纯装饰，pointer-events: none。透明度刻意压到很低：
+   这层是"减光"的，压过头会让 11px 的小字发灰 —— 终端风味不该以可读性为代价。 */
+
+.crt {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, .22) 0 1px,
+      rgba(0, 0, 0, 0)   1px 3px
+    );
+  opacity: .12;
+  mix-blend-mode: multiply;
+}
+.crt::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0) 62%, rgba(0,0,0,.38) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) { .crt { display: none; } }
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 328px;
+  min-height: 0;
+  min-width: 0;
+  gap: 1px;
+  background: var(--border);
+}
+
+/* ---------------- 顶栏 ---------------- */
+
+/* 头部是「状态栏 + 连接诊断条」两层纵向堆叠。
+   诊断条只在连接失败时出现，出现时把 main 往下推 —— 不做浮层，避免压住画布。 */
+#app-head {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 34px;
+  min-height: 34px;
+  background: var(--surface);
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text);
+}
+.brand::before { content: '['; color: var(--text-faint); }
+.brand::after  { content: ']'; color: var(--text-faint); }
+.brand span { color: var(--accent); }
+
+/* 光标块：终端"正在运行"的暗示 */
+.brand::after { animation: blink 1.6s steps(1) infinite; }
+@keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .brand::after { animation: none; } }
+
+/* 状态指示灯做成方块字符，而不是圆点 —— 圆点是网页语汇 */
+.dot {
+  flex: none;
+  width: 8px; height: 12px;
+  background: var(--text-faint);
+}
+.dot.open       { background: var(--accent); box-shadow: 0 0 8px rgba(255,144,0,.65); }
+.dot.connecting { background: var(--warn);   animation: blink 1s steps(1) infinite; }
+.dot.error,
+.dot.closed     { background: var(--danger); box-shadow: 0 0 8px rgba(255,77,77,.6); }
+
+.conn-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.spacer { flex: 1 1 auto; min-width: 4px; }
+
+.counts {
+  color: var(--text-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  letter-spacing: .02em;
+}
+
+/* ---------------- 连接诊断条 ---------------- */
+
+#conn-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px 10px;
+  background: rgba(255, 77, 77, .06);
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  /* 诊断内容最长时有 4 条动作，必须在低矮窗口上也能自己滚，
+     否则顶栏会把画布和时间线一起顶出视口。 */
+  max-height: 38vh;
+  overflow: auto;
+  flex: none;
+}
+
+.ch-tag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  color: var(--danger);
+  border: 1px solid rgba(255, 77, 77, .5);
+  background: rgba(255, 77, 77, .12);
+  padding: 1px 7px;
+  margin-top: 1px;
+}
+.ch-tag::before { content: '[ '; }
+.ch-tag::after  { content: ' ]'; }
+
+.ch-body { flex: 1 1 auto; min-width: 0; line-height: 1.7; }
+.ch-title { font-size: 12px; font-weight: 700; color: #ff9d9d; }
+.ch-detail {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  word-break: break-word;
+}
+.ch-body ol {
+  margin: 5px 0 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.8;
+  counter-reset: chstep;
+}
+.ch-body ol li { counter-increment: chstep; padding-left: 22px; position: relative; }
+.ch-body ol li::before {
+  content: '[' counter(chstep) ']';
+  position: absolute; left: 0;
+  color: var(--text-faint);
+}
+.ch-actions { flex: none; display: flex; flex-direction: column; gap: 4px; }
+
+/* ---------------- 表单控件 ---------------- */
+
+input[type=text], select {
+  background: var(--bg-deep);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  border-radius: var(--r);
+  padding: 3px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  outline: none;
+  min-width: 0;
+}
+input[type=text]:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(255, 144, 0, .18);
+}
+input::placeholder { color: var(--text-faint); }
+/* 终端里不需要花哨的 caret，但需要它能被看见 */
+input, textarea { caret-color: var(--accent); }
+
+select {
+  appearance: none;
+  padding-right: 18px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+                    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 11px) 52%, calc(100% - 7px) 52%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+/* 按钮统一成 [ LABEL ] —— 括号由 CSS 给，JS 只写文案 */
+button {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 3px 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .04em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .08s, border-color .08s, background .08s;
+}
+button::before { content: '['; color: var(--text-faint); padding-right: 5px; }
+button::after  { content: ']'; color: var(--text-faint); padding-left: 5px; }
+button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-2);
+  text-shadow: var(--glow-soft);
+}
+
+button.ghost { background: transparent; }
+button.tiny { padding: 1px 2px; font-size: 11px; }
+
+/* ---------------- 按钮的三种状态 ----------------
+   注意顺序：.primary / .on 都是"反白"，而 :disabled 必须排在它们**之后** ——
+   三者特异性相同，只能靠源码顺序压住底色。否则 WebGL 停摆时那个反白的主按钮
+   会仍旧一身亮橙，看着像能点。 */
+
+/* 主操作 = 反白橙：终端里的"高亮选中" */
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 700;
+}
+button.primary::before, button.primary::after { color: rgba(0, 0, 0, .55); }
+button.primary:hover:not(:disabled) { background: #ffab33; text-shadow: none; }
+
+/* 激活态 = 橙框 + 暗橙底。与 primary 各管一件事：
+   一个表示"按下去会做事"，一个表示"这个开关现在是开着的"。 */
+button.on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+  text-shadow: 0 0 6px rgba(255, 144, 0, .4);
+}
+button.on::before, button.on::after { color: rgba(255, 144, 0, .55); }
+
+/* 禁用态（必须留在这一段的最后，理由见上） */
+button:disabled {
+  background: transparent;
+  color: var(--text-faint);
+  border-color: var(--border);
+  opacity: .55;
+  cursor: default;
+}
+button:disabled::before, button:disabled::after { color: var(--text-faint); }
+
+/* ---------------- 画布区 ---------------- */
+
+#stage { position: relative; min-width: 0; background: var(--bg); overflow: hidden; }
+#graph-host { position: absolute; inset: 0; }
+#graph-host canvas { display: block; width: 100%; height: 100%; }
+
+#stage-bar {
+  position: absolute; top: 8px; left: 10px;
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 5px;
+  max-width: calc(100% - 20px);
+  background: rgba(13, 13, 13, .86);
+  border: 1px solid var(--border);
+}
+#stage-bar .counts { margin-left: 8px; }
+
+#stage-hint {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  background: rgba(13, 13, 13, .72);
+  text-align: center;
+  color: var(--text-dim);
+  line-height: 2;
+  max-width: min(420px, calc(100% - 32px));
+  pointer-events: none;
+  font-size: 11px;
+}
+#stage-hint::before,
+#stage-hint::after {
+  position: absolute;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1;
+}
+#stage-hint::before { content: '┌'; top: -1px; left: 2px; }
+#stage-hint::after  { content: '┘'; bottom: -1px; right: 2px; }
+#stage-hint b { color: var(--text); font-weight: 700; }
+#stage-hint code {
+  font-family: var(--mono); color: var(--accent);
+  background: var(--surface-2); padding: 1px 4px;
+}
+#stage-hint.hidden { display: none; }
+
+.legend {
+  position: absolute; bottom: 8px; left: 10px;
+  display: flex; gap: 12px;
+  font-size: 11px; color: var(--text-faint);
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+.legend i {
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-right: 5px;
+  vertical-align: baseline;
+  background: var(--sw, var(--text-dim));
+}
+.legend i[data-c="root"]     { --sw: var(--accent); }
+.legend i[data-c="normal"]   { --sw: #d6d6d6; }
+.legend i[data-c="selected"] { --sw: #ffe3b0; }
+.legend i[data-c="pulse"]    { --sw: var(--warn); }
+.legend i[data-c="released"] { --sw: #4a4a4a; }
+
+/* WebGL 缺位时舞台上的一切浮层都该退场，只留终止态面板 */
+#stage.no-render #stage-bar,
+#stage.no-render #stage-hint,
+#stage.no-render .legend { display: none; }
+
+/* ---------------- WebGL 缺失终止态 ---------------- */
+
+.render-fatal {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  overflow: auto;
+}
+.render-fatal .rf-box {
+  width: 100%;
+  max-width: 640px;
+  max-height: 100%;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  border-top-width: 3px;
+  padding: 16px 18px;
+}
+.rf-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.rf-tag {
+  font-size: 11px; font-weight: 700; letter-spacing: .1em;
+  color: var(--danger);
+  border: 1px solid rgba(255, 77, 77, .5);
+  background: rgba(255, 77, 77, .12);
+  padding: 1px 7px;
+  flex: none;
+}
+.rf-tag::before { content: '!! '; }
+.rf-title { font-size: 14px; font-weight: 700; color: #ff9d9d; }
+.rf-lead { margin: 0 0 12px; color: var(--text-dim); line-height: 1.8; font-size: 12px; }
+.rf-detail {
+  font-size: 11px; color: var(--danger);
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--danger);
+  padding: 7px 9px;
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+.rf-block-title {
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-faint); margin-bottom: 6px;
+}
+.rf-block-title::before { content: '# '; }
+.render-fatal ol {
+  margin: 0; padding-left: 0; list-style: none;
+  color: var(--text-dim); line-height: 1.9; font-size: 11px;
+  counter-reset: rfstep;
+}
+.render-fatal ol li { counter-increment: rfstep; padding-left: 24px; position: relative; }
+.render-fatal ol li::before {
+  content: '[' counter(rfstep) ']';
+  position: absolute; left: 0; color: var(--text-faint);
+}
+.render-fatal code {
+  font-family: var(--mono); color: var(--accent);
+  background: var(--surface-2); padding: 1px 4px;
+}
+
+/* ---------------- 检查器 ---------------- */
+
+#inspector {
+  background: var(--surface);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 10px 10px;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* .sec 做成"带标题的框"：标题骑在框线上，等价于 ┌─ TITLE ─┐ */
+.sec {
+  position: relative;
+  border: 1px solid var(--border);
+  padding: 12px 10px 10px;
+  margin-bottom: 12px;
+  background: transparent;
+}
+.sec > h3 {
+  position: absolute;
+  top: -8px; left: 8px;
+  margin: 0;
+  padding: 0 6px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.sec > h3::before { content: '─· '; color: var(--text-faint); }
+.sec > h3::after  { content: ' ·'; color: var(--text-faint); }
+
+.node-title { font-size: 13px; font-weight: 700; color: var(--accent); word-break: break-all; }
+.node-sub {
+  font-size: 11px; color: var(--text-dim);
+  word-break: break-all; margin-top: 3px;
+}
+.node-sub::before { content: 'path: '; color: var(--text-faint); }
+
+.kv {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 11px; padding: 2px 0;
+  border-bottom: 1px dotted rgba(255, 255, 255, .1);
+}
+.kv > span:first-child { color: var(--text-faint); flex: none; }
+.kv > span:last-child { text-align: right; word-break: break-all; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+
+.row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  margin-bottom: 4px;
+  font-size: 11px;
+  min-width: 0;
+}
+.row:hover { border-color: var(--border-2); }
+.row .name { color: var(--text); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row .val {
+  color: var(--text-dim); margin-left: auto; text-align: right;
+  word-break: break-all; min-width: 0;
+}
+.row .val b { color: var(--accent); font-weight: 700; }
+.row.empty {
+  color: var(--text-faint);
+  justify-content: center;
+  background: transparent;
+  border-style: dashed;
+}
+.row.empty::before { content: '· '; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  background: transparent;
+  border: 1px solid var(--border-2);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.chip:hover { border-color: var(--accent); color: var(--text); }
+.chip.on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+.note { font-size: 11px; color: var(--text-faint); line-height: 1.75; }
+.note::before { content: '# '; }
+.note.warn { color: var(--warn); }
+.note.err  { color: var(--danger); }
+
+.field { display: flex; gap: 5px; align-items: center; margin-bottom: 5px; min-width: 0; }
+.field input[type=text] { flex: 1 1 auto; min-width: 0; }
+.field select { flex: none; }
+
+/* ---------------- 观察清单 ---------------- */
+
+.spec {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  margin-bottom: 4px;
+  min-width: 0;
+}
+.spec .label {
+  font-size: 11px;
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
+  color: var(--text);
+}
+.spec .label:hover { color: var(--accent); text-shadow: 0 0 6px rgba(255,144,0,.35); }
+.spec .kind { font-size: 10px; color: var(--text-faint); flex: none; letter-spacing: .04em; }
+.spec .x { padding: 0 1px; font-size: 11px; }
+.spec.failed { border-color: #4a1d1d; border-left-color: var(--danger); }
+.spec.failed .label { color: var(--danger); cursor: default; }
+.spec.root { border-left-color: var(--accent); }
+.spec.root .label { color: var(--accent); }
+
+/* 导入 / 导出文本框 */
+.io-box {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.io-box .note { margin-top: 6px; }
+
+textarea {
+  width: 100%;
+  min-height: 88px;
+  max-height: 220px;
+  resize: vertical;
+  background: var(--bg-deep);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  padding: 6px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  outline: none;
+}
+
+/* 通道行的行内写入 */
+.row.write-row { background: var(--surface-3); border-color: var(--border-2); }
+.row.write-row input[type=text] { flex: 1 1 auto; min-width: 0; }
+.row.write-row select { flex: none; }
+
+.hidden { display: none !important; }
+
+/* ---------------- 事件时间线 ---------------- */
+
+#timeline {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 148px;
+}
+#timeline.collapsed { height: 27px; }
+#timeline.collapsed .tl-body { display: none; }
+
+.tl-head {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  min-height: 26px;
+}
+.tl-head .title {
+  font-weight: 700; font-size: 11px;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tl-head .title::before { content: '── '; color: var(--text-faint); }
+.tl-head .title::after  { content: ' ──'; color: var(--text-faint); }
+
+.tl-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1 1 auto;
+  font-size: 11px;
+  line-height: 1.65;
+  padding: 3px 0;
+  min-height: 0;
+}
+.tl-body .empty { color: var(--text-faint); padding: 6px 10px; }
+.tl-body .empty::before { content: '# '; }
+
+.tl-row {
+  display: flex; gap: 8px;
+  padding: 0 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tl-row:hover { background: var(--surface-2); }
+.tl-row .t { color: var(--text-faint); flex: none; }
+.tl-row .t::before { content: '> '; }
+.tl-row .ty { flex: none; width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.tl-row .path { color: var(--text-dim); flex: none; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.tl-row .pay { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* 事件类型用色：橙=结构变化，琥珀=数据变化（最常见，用最柔的一档），灰=消失，
+   红=Released。时间线是长时间滚动的列表，这里刻意避开高饱和橙做正文色。 */
+.ty-ChildConnected     { color: var(--accent); }
+.ty-ChildDisconnected  { color: var(--text-dim); }
+.ty-DataChannelChanged { color: var(--warn); text-shadow: var(--glow-soft); }
+.ty-Released           { color: var(--danger); }
+.ty-other              { color: var(--text-dim); }
+.ty-conn               { color: var(--text-faint); }
+
+/* ---------------- 滚动条 ---------------- */
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border: 2px solid var(--bg-deep);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+::-webkit-scrollbar-corner { background: var(--bg-deep); }
+
+/* ---------------- 顶栏输入框：带 `>` 提示符的凹槽 ----------------
+   用 id 提升特异性，免得被后面「表单控件」那一段的 input:focus 覆盖掉。 */
+
+#toolbar .ibox {
+  display: flex;
+  align-items: center;
+  flex: none;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-2);
+  padding: 0 6px;
+}
+#toolbar .ibox > b {
+  color: var(--text-faint);
+  font-weight: 400;
+  padding-right: 4px;
+  user-select: none;
+}
+#toolbar .ibox input[type=text],
+#toolbar .ibox input[type=text]:focus {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 0;
+}
+#toolbar .ibox:focus-within {
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(255, 144, 0, .18);
+}
+#tb-url { width: 196px; }
+#tb-domain { width: 122px; }
+
+/* ---------------- 窄视口兜底 ----------------
+   窗口在小屏上会被宿主收缩（见 WebviewWrapper::ApplyDesignSize），
+   这里保证收窄后仍然塞得下：先让检查器变窄，再让时间线变矮，最后才轮到画布。 */
+
+@media (max-width: 1120px) {
+  main { grid-template-columns: minmax(0, 1fr) 280px; }
+  #tb-url { width: 150px; }
+  #tb-domain { width: 96px; }
+}
+@media (max-width: 960px) {
+  main { grid-template-columns: minmax(0, 1fr) 244px; }
+  #inspector { padding: 12px 7px 8px; }
+  #tb-url { width: 118px; }
+  #tb-domain { width: 78px; }
+  .brand span { display: none; }
+}
+@media (max-height: 660px) {
+  #timeline { height: 116px; }
+}
+@media (max-height: 540px) {
+  #timeline { height: 84px; }
+}

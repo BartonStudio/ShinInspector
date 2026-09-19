@@ -26,13 +26,11 @@ export default defineConfig({
     },
   },
   build: {
-    // 多页面：index（调试页）+ settings（设置页）。
+    // 单页应用：只构建 index.html。
+    // 原 settings.html 已删除 —— 它存在的唯一理由是 IPC/WS 二选一，现在只剩 WS。
     rollupOptions: {
-      input: {
-        index: resolve(here, 'index.html'),
-        settings: resolve(here, 'settings.html'),
-      },
+      input: resolve(here, 'index.html'),
     },
   },
-  appType: 'mpa',
+  appType: 'spa',
 });
